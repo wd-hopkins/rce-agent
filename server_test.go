@@ -12,7 +12,6 @@ import (
 	"github.com/square/rce-agent"
 	"github.com/square/rce-agent/cmd"
 	"github.com/square/rce-agent/pb"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -179,7 +178,7 @@ func TestServerTLS(t *testing.T) {
 	}
 
 	id, gotErr := c.Start("nonexistent-cmd", []string{})
-	expectErr := grpc.Errorf(codes.InvalidArgument, "unknown command: nonexistent-cmd")
+	expectErr := status.Errorf(codes.InvalidArgument, "unknown command: nonexistent-cmd")
 	if diff := deep.Equal(gotErr, expectErr); diff != nil {
 		t.Error(diff)
 	}
@@ -204,9 +203,6 @@ func TestServerWithConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err != nil {
-		t.Fatal(err)
-	}
 	cfg := rce.ServerConfig{
 		Addr:            LADDR,
 		AllowedCommands: whitelist,
@@ -278,9 +274,6 @@ func TestServerAnyCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err != nil {
-		t.Fatal(err)
-	}
 	cfg := rce.ServerConfig{
 		Addr:            LADDR,
 		AllowAnyCommand: true,

@@ -103,6 +103,7 @@ func NewServerWithConfig(cfg ServerConfig) Server {
 
 // Internal implementation of pb.RCEAgentServer interface.
 type server struct {
+	pb.UnimplementedRCEAgentServer
 	cfg ServerConfig
 	// --
 	repo       cmd.Repo     // running commands

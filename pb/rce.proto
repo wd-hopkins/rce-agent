@@ -2,6 +2,8 @@
 
 syntax = "proto3";
 
+option go_package = "github.com/square/rce-agent/pb";
+
 package rce;
 
 service RCEAgent {
@@ -21,6 +23,9 @@ service RCEAgent {
 
   // Return a list of all running (not reaped) commands by ID.
   rpc Running(Empty) returns (stream ID) {}
+
+  // Execute a command and stream its status.
+  rpc Exec(Command) returns (stream Status) {}
 }
 
 message Empty {}
