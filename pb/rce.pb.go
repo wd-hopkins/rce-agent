@@ -381,7 +381,7 @@ const file_pb_rce_proto_rawDesc = "" +
 	".rce.Empty\"\x00\x12\"\n" +
 	"\aRunning\x12\n" +
 	".rce.Empty\x1a\a.rce.ID\"\x000\x01\x12%\n" +
-	"\x04Exec\x12\f.rce.Command\x1a\v.rce.Status\"\x000\x01B Z\x1egithub.com/square/rce-agent/pbb\x06proto3"
+	"\x04Exec\x12\f.rce.Command\x1a\v.rce.Status\"\x000\x01B$Z\"github.com/wd-hopkins/rce-agent/pbb\x06proto3"
 
 var (
 	file_pb_rce_proto_rawDescOnce sync.Once

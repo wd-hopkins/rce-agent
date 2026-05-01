@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/go-test/deep"
-	"github.com/square/rce-agent"
-	"github.com/square/rce-agent/cmd"
-	"github.com/square/rce-agent/pb"
+	"github.com/wd-hopkins/rce-agent"
+	"github.com/wd-hopkins/rce-agent/cmd"
+	"github.com/wd-hopkins/rce-agent/pb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -335,5 +335,27 @@ func TestServerAnyCommand(t *testing.T) {
 		t.Errorf("got %d lines of stdout, expected 1: %v", len(gotStatus.Stdout), gotStatus.Stdout)
 	} else if gotStatus.Stdout[0] != gover {
 		t.Errorf("stdout = '%s', expected '%s'", gotStatus.Stdout[0], string(gover))
+	}
+}
+
+func TestServerExec(t *testing.T) {
+	s := rce.NewServer(LADDR, nil, whitelist)
+
+	c := &pb.Command{
+		Name:      "echo",
+		Arguments: []string{"hello"},
+	}
+
+	stream, err := s.Exec(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotStatus, err := stream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotStatus == nil {
+		t.Fatal("got nil pb.Status")
 	}
 }

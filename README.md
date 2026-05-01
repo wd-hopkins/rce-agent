@@ -1,8 +1,8 @@
 # RCE Agent
 
-![Build and Tests](https://github.com/square/rce-agent/actions/workflows/go.yml/badge.svg)
-[![Go Report Card](https://goreportcard.com/badge/github.com/square/rce-agent)](https://goreportcard.com/report/github.com/square/rce-agent)
-[![Go Reference](https://pkg.go.dev/badge/github.com/square/rce-agent.svg)](https://pkg.go.dev/github.com/square/rce-agent)
+![Build and Tests](https://github.com/wd-hopkins/rce-agent/actions/workflows/go.yml/badge.svg)
+[![Go Report Card](https://goreportcard.com/badge/github.com/wd-hopkins/rce-agent)](https://goreportcard.com/report/github.com/wd-hopkins/rce-agent)
+[![Go Reference](https://pkg.go.dev/badge/github.com/wd-hopkins/rce-agent.svg)](https://pkg.go.dev/github.com/wd-hopkins/rce-agent)
 
 rce-agent is a gRPC-based Remote Command Execution (RCE) client and server.
 The server (or "agent") runs on a remote host and executes a whitelist of
@@ -22,7 +22,7 @@ RCE Agent is also meant to be used with your private certificate authority (CA) 
 communication and mutual authentication of client and agent.
 (Setting up a private CA is beyond the scope of this project, but we highly suggest you use one!)
 Normally, only the client verifies the server's TLS certificate (cert). For additional security,
-your code should use [rce.TLSFiles](https://godoc.org/github.com/square/rce-agent#TLSFiles)
+your code should use [rce.TLSFiles](https://godoc.org/github.com/wd-hopkins/rce-agent#TLSFiles)
 to create Go `tls.Config` which makes the server (agent) verify the client's cert, too.
 
 ## Generating files
@@ -33,7 +33,7 @@ go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 ```
 
 ```bash
-protoc --go_out=. --go_opt=paths=source_relative \     
+protoc --go_out=. --go_opt=paths=source_relative \
     --go-grpc_out=. --go-grpc_opt=paths=source_relative \
     pb/rce.proto
 ```

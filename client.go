@@ -12,7 +12,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/square/rce-agent/pb"
+	"github.com/wd-hopkins/rce-agent/pb"
 	context "golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -69,6 +69,10 @@ type Client interface {
 
 	// Return a list of all running command IDs.
 	Running() ([]string, error)
+
+	// Execute a command on the remote agent and stream its status frames.
+	// The returned ExecStream must be drained until io.EOF or an error.
+	Exec(ctx context.Context, cmd *pb.Command) (ExecStream, error)
 }
 
 type client struct {
@@ -188,4 +192,8 @@ func (c *client) Running() ([]string, error) {
 	}
 
 	return ids, nil
+}
+
+func (c *client) Exec(ctx context.Context, cmd *pb.Command) (ExecStream, error) {
+	return c.agent.Exec(ctx, cmd)
 }

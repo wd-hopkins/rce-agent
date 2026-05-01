@@ -24,8 +24,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/square/rce-agent"
-	"github.com/square/rce-agent/pb"
+	"github.com/wd-hopkins/rce-agent"
+	"github.com/wd-hopkins/rce-agent/pb"
 )
 
 var (
@@ -172,7 +172,7 @@ func main() {
 		log.Fatalf("client.Wait: %s", err)
 	}
 
-	// See https://godoc.org/github.com/square/rce-agent/pb#Status
+	// See https://godoc.org/github.com/wd-hopkins/rce-agent/pb#Status
 	// For this example, we just pretty-print the whole struct.
 	lnfmt := "%9s: %v\n"
 	fmt.Printf(lnfmt, "ID", finalStatus.ID)

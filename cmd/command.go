@@ -31,8 +31,8 @@ type Cmd struct {
 }
 
 // NewCmd makes a new Cmd with the given Spec and args, and assigns it an ID.
-func NewCmd(s Spec, args []string) *Cmd {
-	cmd := gocmd.NewCmd(s.Path(), args...)
+func NewCmd(opts gocmd.Options, s Spec, args []string) *Cmd {
+	cmd := gocmd.NewCmdOptions(opts, s.Path(), args...)
 	return &Cmd{
 		Id:   id(),
 		Name: s.Name,

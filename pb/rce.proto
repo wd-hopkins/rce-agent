@@ -2,7 +2,7 @@
 
 syntax = "proto3";
 
-option go_package = "github.com/square/rce-agent/pb";
+option go_package = "github.com/wd-hopkins/rce-agent/pb";
 
 package rce;
 

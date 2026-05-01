@@ -1,4 +1,4 @@
-module github.com/square/rce-agent
+module github.com/wd-hopkins/rce-agent
 
 go 1.26
 

@@ -5,15 +5,18 @@ package rce
 import (
 	"crypto/tls"
 	"errors"
+	"io"
 	"log"
 	"net"
 
-	"github.com/square/rce-agent/cmd"
-	pb "github.com/square/rce-agent/pb"
+	gocmd "github.com/go-cmd/cmd"
+	"github.com/wd-hopkins/rce-agent/cmd"
+	pb "github.com/wd-hopkins/rce-agent/pb"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -34,6 +37,25 @@ var (
 	ErrCommandNotAllowed = errors.New("command not allowed")
 )
 
+// ExecStream is the return type of Server.Exec, allowing the caller to receive
+// a stream of Status messages from a running command.
+type ExecStream interface {
+	Recv() (*pb.Status, error)
+}
+
+// localExecStream implements ExecStream using an in-process channel.
+type localExecStream struct {
+	ch chan *pb.Status
+}
+
+func (s *localExecStream) Recv() (*pb.Status, error) {
+	st, ok := <-s.ch
+	if !ok {
+		return nil, io.EOF
+	}
+	return st, nil
+}
+
 // A Server executes a whitelist of commands when called by clients.
 type Server interface {
 	// Start the gRPC server, non-blocking.
@@ -42,7 +64,15 @@ type Server interface {
 	// Stop the gRPC server gracefully.
 	StopServer() error
 
-	pb.RCEAgentServer
+	Start(context.Context, *pb.Command) (*pb.ID, error)
+	Wait(context.Context, *pb.ID) (*pb.Status, error)
+	GetStatus(context.Context, *pb.ID) (*pb.Status, error)
+	Stop(context.Context, *pb.ID) (*pb.Empty, error)
+
+	// Exec runs a command and streams its output. The returned ExecStream
+	// can be used to receive Status messages including live stdout/stderr lines
+	// and a final Status when the command completes.
+	Exec(context.Context, *pb.Command) (ExecStream, error)
 }
 
 // ServerConfig configures a Server.
@@ -101,13 +131,58 @@ func NewServerWithConfig(cfg ServerConfig) Server {
 	return s
 }
 
-// Internal implementation of pb.RCEAgentServer interface.
+// Internal implementation of the Server interface.
 type server struct {
-	pb.UnimplementedRCEAgentServer
 	cfg ServerConfig
 	// --
 	repo       cmd.Repo     // running commands
 	grpcServer *grpc.Server // gRPC server instance of this agent
+}
+
+// grpcAdapter wraps server and implements pb.RCEAgentServer so the gRPC
+// server can be registered separately from the public Server interface.
+type grpcAdapter struct {
+	pb.UnimplementedRCEAgentServer
+	s *server
+}
+
+func (a *grpcAdapter) Start(ctx context.Context, c *pb.Command) (*pb.ID, error) {
+	return a.s.Start(ctx, c)
+}
+
+func (a *grpcAdapter) Wait(ctx context.Context, id *pb.ID) (*pb.Status, error) {
+	return a.s.Wait(ctx, id)
+}
+
+func (a *grpcAdapter) GetStatus(ctx context.Context, id *pb.ID) (*pb.Status, error) {
+	return a.s.GetStatus(ctx, id)
+}
+
+func (a *grpcAdapter) Stop(ctx context.Context, id *pb.ID) (*pb.Empty, error) {
+	return a.s.Stop(ctx, id)
+}
+
+func (a *grpcAdapter) Running(empty *pb.Empty, stream grpc.ServerStreamingServer[pb.ID]) error {
+	return a.s.Running(empty, stream)
+}
+
+func (a *grpcAdapter) Exec(c *pb.Command, grpcStream grpc.ServerStreamingServer[pb.Status]) error {
+	execStream, err := a.s.Exec(grpcStream.Context(), c)
+	if err != nil {
+		return err
+	}
+	for {
+		st, err := execStream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := grpcStream.Send(st); err != nil {
+			return err
+		}
+	}
 }
 
 // NewServer makes a new Server that listens on laddr and runs the whitelist
@@ -139,8 +214,9 @@ func (s *server) StartServer() error {
 		}
 	}
 
-	// Register the RCEAgent service with the gRPC server.
-	pb.RegisterRCEAgentServer(s.grpcServer, s)
+	// Register the RCEAgent service with the gRPC server via grpcAdapter,
+	// which bridges between the gRPC server-streaming interface and Server.Exec.
+	pb.RegisterRCEAgentServer(s.grpcServer, &grpcAdapter{s: s})
 
 	lis, err := net.Listen("tcp", s.cfg.Addr)
 	if err != nil {
@@ -174,10 +250,10 @@ func (s *server) Start(ctx context.Context, c *pb.Command) (*pb.ID, error) {
 		spec, err := s.cfg.AllowedCommands.FindByName(c.Name)
 		if err != nil {
 			log.Printf("unknown command: %s", c.Name)
-			return id, grpc.Errorf(codes.InvalidArgument, "unknown command: %s", c.Name)
+			return id, status.Errorf(codes.InvalidArgument, "unknown command: %s", c.Name)
 		}
 		// Append cmd request args to cmd spec args
-		rceCmd = cmd.NewCmd(spec, append(spec.Args(), c.Arguments...))
+		rceCmd = cmd.NewCmd(gocmd.Options{Buffered: true}, spec, append(spec.Args(), c.Arguments...))
 
 		path = spec.Path()
 	} else if s.cfg.AllowAnyCommand {
@@ -186,7 +262,7 @@ func (s *server) Start(ctx context.Context, c *pb.Command) (*pb.ID, error) {
 			Name: c.Name, // any command, like "/usr/local/bin/gofmt"
 			Exec: append([]string{c.Name}, c.Arguments...),
 		}
-		rceCmd = cmd.NewCmd(spec, c.Arguments)
+		rceCmd = cmd.NewCmd(gocmd.Options{Buffered: true}, spec, c.Arguments)
 
 		path = c.Name
 	} else {
@@ -196,7 +272,7 @@ func (s *server) Start(ctx context.Context, c *pb.Command) (*pb.ID, error) {
 	if err := s.repo.Add(rceCmd); err != nil {
 		// This should never happen
 		log.Printf("duplicate command: %+v", rceCmd)
-		return id, grpc.Errorf(codes.AlreadyExists, "duplicate command: %s", rceCmd.Id)
+		return id, status.Errorf(codes.AlreadyExists, "duplicate command: %s", rceCmd.Id)
 	}
 
 	log.Printf("cmd=%s: start: %s path: %s args: %v", rceCmd.Id, c.Name, path, rceCmd.Args)
@@ -260,8 +336,69 @@ func (s *server) Running(empty *pb.Empty, stream pb.RCEAgent_RunningServer) erro
 	return nil
 }
 
+func (s *server) Exec(ctx context.Context, c *pb.Command) (ExecStream, error) {
+	var rceCmd *cmd.Cmd
+	if s.cfg.AllowedCommands != nil {
+		spec, err := s.cfg.AllowedCommands.FindByName(c.Name)
+		if err != nil {
+			log.Printf("unknown command: %s", c.Name)
+			return nil, status.Errorf(codes.InvalidArgument, "unknown command: %s", c.Name)
+		}
+		rceCmd = cmd.NewCmd(gocmd.Options{Buffered: false, Streaming: true}, spec, append(spec.Args(), c.Arguments...))
+	} else if s.cfg.AllowAnyCommand {
+		spec := cmd.Spec{
+			Name: c.Name,
+			Exec: append([]string{c.Name}, c.Arguments...),
+		}
+		rceCmd = cmd.NewCmd(gocmd.Options{Buffered: false, Streaming: true}, spec, c.Arguments)
+	} else {
+		return nil, ErrCommandNotAllowed
+	}
+
+	if err := s.repo.Add(rceCmd); err != nil {
+		// This should never happen
+		log.Printf("duplicate command: %+v", rceCmd)
+		return nil, status.Errorf(codes.AlreadyExists, "duplicate command: %s", rceCmd.Id)
+	}
+
+	log.Printf("cmd=%s: exec: %s args: %v", rceCmd.Id, c.Name, rceCmd.Args)
+
+	localStream := &localExecStream{ch: make(chan *pb.Status, 100)}
+	go func() {
+		defer close(localStream.ch)
+		defer s.repo.Remove(rceCmd.Id)
+
+		doneChan := make(chan struct{})
+		go func() {
+			defer close(doneChan)
+			for rceCmd.Cmd.Stdout != nil || rceCmd.Cmd.Stderr != nil {
+				select {
+				case line, open := <-rceCmd.Cmd.Stdout:
+					if !open {
+						rceCmd.Cmd.Stdout = nil
+						continue
+					}
+					localStream.ch <- &pb.Status{Stdout: []string{line}}
+				case line, open := <-rceCmd.Cmd.Stderr:
+					if !open {
+						rceCmd.Cmd.Stderr = nil
+						continue
+					}
+					localStream.ch <- &pb.Status{Stderr: []string{line}}
+				}
+			}
+		}()
+
+		<-rceCmd.Cmd.Start()
+		<-doneChan
+		localStream.ch <- mapStatus(rceCmd)
+	}()
+
+	return localStream, nil
+}
+
 func notFound(id *pb.ID) error {
-	return grpc.Errorf(codes.NotFound, "command ID %s not found", id.ID)
+	return status.Errorf(codes.NotFound, "command ID %s not found", id.ID)
 }
 
 func mapStatus(cmd *cmd.Cmd) *pb.Status {

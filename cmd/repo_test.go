@@ -5,7 +5,7 @@ package cmd_test
 import (
 	"testing"
 
-	"github.com/square/rce-agent/cmd"
+	"github.com/wd-hopkins/rce-agent/cmd"
 )
 
 func TestOneId(t *testing.T) {

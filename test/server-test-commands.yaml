@@ -5,3 +5,5 @@ commands:
     exec: [/bin/echo]
   - name: sleep60
     exec: [/bin/sleep, 60]
+  - name: echo-loop
+    exec: [/bin/bash, -c, "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick; sleep 0.2; done; date +'%Y/%m/%d %H:%M:%S.%N'"]

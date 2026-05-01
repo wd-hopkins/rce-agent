@@ -28,8 +28,8 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/square/rce-agent"
-	"github.com/square/rce-agent/cmd"
+	"github.com/wd-hopkins/rce-agent"
+	"github.com/wd-hopkins/rce-agent/cmd"
 )
 
 var (
