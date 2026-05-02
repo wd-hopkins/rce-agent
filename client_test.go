@@ -13,6 +13,8 @@ import (
 	"github.com/go-test/deep"
 	"github.com/wd-hopkins/rce-agent"
 	"github.com/wd-hopkins/rce-agent/pb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestClientExitZero(t *testing.T) {
@@ -165,5 +167,116 @@ func TestClientExecLongRunningCommand(t *testing.T) {
 	}
 	if lastStatus.ExitCode != 0 {
 		t.Errorf("last frame ExitCode = %d, expected 0", lastStatus.ExitCode)
+	}
+}
+
+// startAuthServer starts a server that requires the given bearer token.
+// The env var is consumed by NewServer, so this helper sets it immediately
+// before construction to keep each test self-contained.
+func startAuthServer(t *testing.T, token string) rce.Server {
+	t.Helper()
+	os.Setenv("RCE_AUTH_TOKEN", token)
+	s := rce.NewServer(LADDR, nil, whitelist)
+	// Verify the secret was cleared from the environment immediately.
+	if got := os.Getenv("RCE_AUTH_TOKEN"); got != "" {
+		t.Errorf("RCE_AUTH_TOKEN still set after NewServer; child processes would inherit the secret")
+	}
+	go s.StartServer()
+	time.Sleep(200 * time.Millisecond)
+	return s
+}
+
+// TestAuthMissingToken verifies that a client without a token is rejected.
+func TestAuthMissingToken(t *testing.T) {
+	s := startAuthServer(t, "supersecret")
+	defer s.StopServer()
+
+	c := rce.NewClient(nil) // no token set
+	if err := c.Open(HOST, PORT); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	_, err := c.Start("exit.zero", []string{})
+	if err == nil {
+		t.Fatal("expected Unauthenticated error, got nil")
+	}
+	if code := status.Code(err); code != codes.Unauthenticated {
+		t.Errorf("got gRPC code %v, expected Unauthenticated", code)
+	}
+}
+
+// TestAuthWrongToken verifies that a client with an incorrect token is rejected.
+func TestAuthWrongToken(t *testing.T) {
+	s := startAuthServer(t, "supersecret")
+	defer s.StopServer()
+
+	c := rce.NewClient(nil)
+	c.SetToken("wrongtoken")
+	if err := c.Open(HOST, PORT); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	_, err := c.Start("exit.zero", []string{})
+	if err == nil {
+		t.Fatal("expected Unauthenticated error, got nil")
+	}
+	if code := status.Code(err); code != codes.Unauthenticated {
+		t.Errorf("got gRPC code %v, expected Unauthenticated", code)
+	}
+}
+
+// TestAuthValidToken verifies that a client with the correct token succeeds.
+func TestAuthValidToken(t *testing.T) {
+	const token = "supersecret"
+	s := startAuthServer(t, token)
+	defer s.StopServer()
+
+	c := rce.NewClient(nil)
+	c.SetToken(token)
+	if err := c.Open(HOST, PORT); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	id, err := c.Start("exit.zero", []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := c.Wait(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, expected 0", st.ExitCode)
+	}
+}
+
+// TestAuthExecMissingToken verifies that the streaming Exec RPC is also protected.
+func TestAuthExecMissingToken(t *testing.T) {
+	s := startAuthServer(t, "supersecret")
+	defer s.StopServer()
+
+	c := rce.NewClient(nil) // no token
+	if err := c.Open(HOST, PORT); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	stream, err := c.Exec(context.Background(), &pb.Command{Name: "exit.zero"})
+	if err != nil {
+		// Some gRPC versions surface auth errors here rather than on Recv.
+		if code := status.Code(err); code != codes.Unauthenticated {
+			t.Errorf("got gRPC code %v, expected Unauthenticated", code)
+		}
+		return
+	}
+	_, err = stream.Recv()
+	if err == nil {
+		t.Fatal("expected Unauthenticated error from Recv, got nil")
+	}
+	if code := status.Code(err); code != codes.Unauthenticated {
+		t.Errorf("got gRPC code %v, expected Unauthenticated", code)
 	}
 }

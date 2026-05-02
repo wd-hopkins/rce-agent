@@ -7,14 +7,17 @@ import (
 	"errors"
 	"log"
 	"net"
+	"os"
+	"strings"
 
 	gocmd "github.com/go-cmd/cmd"
 	"github.com/wd-hopkins/rce-agent/cmd"
-	pb "github.com/wd-hopkins/rce-agent/pb"
+	"github.com/wd-hopkins/rce-agent/pb"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -86,30 +89,78 @@ func NewServerWithConfig(cfg ServerConfig) Server {
 	// Set log flags here so other pkgs can't override in their init().
 	log.SetFlags(log.Ldate | log.Lmicroseconds | log.Lshortfile | log.LUTC)
 
+	// Read the bearer token from the environment and immediately remove it so
+	// that child processes spawned later cannot inherit the secret.
+	token := os.Getenv("RCE_AUTH_TOKEN")
+	if token != "" {
+		os.Unsetenv("RCE_AUTH_TOKEN")
+	}
+
 	s := &server{
-		cfg: cfg,
+		cfg:   cfg,
+		token: token,
 		// --
 		repo: cmd.NewRepo(),
 	}
 
-	// Create a gRPC server and register this agent a implementing the
-	// RCEAgentServer interface and protocol
-	var grpcServer *grpc.Server
+	// Build gRPC server options.
+	var opts []grpc.ServerOption
 	if cfg.TLS != nil {
-		opt := grpc.Creds(credentials.NewTLS(cfg.TLS))
-		grpcServer = grpc.NewServer(opt)
-	} else {
-		grpcServer = grpc.NewServer()
+		opts = append(opts, grpc.Creds(credentials.NewTLS(cfg.TLS)))
 	}
-	s.grpcServer = grpcServer
+	if token != "" {
+		opts = append(opts,
+			grpc.UnaryInterceptor(s.authUnaryInterceptor),
+			grpc.StreamInterceptor(s.authStreamInterceptor),
+		)
+	}
+
+	s.grpcServer = grpc.NewServer(opts...)
 
 	return s
+}
+
+// authUnaryInterceptor validates the bearer token for unary RPCs.
+func (s *server) authUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	if err := s.checkAuth(ctx); err != nil {
+		return nil, err
+	}
+	return handler(ctx, req)
+}
+
+// authStreamInterceptor validates the bearer token for streaming RPCs.
+func (s *server) authStreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	if err := s.checkAuth(ss.Context()); err != nil {
+		return err
+	}
+	return handler(srv, ss)
+}
+
+// checkAuth extracts and validates the Authorization: Bearer <token> header.
+func (s *server) checkAuth(ctx context.Context) error {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return status.Error(codes.Unauthenticated, "missing metadata")
+	}
+	values := md["authorization"]
+	if len(values) == 0 {
+		return status.Error(codes.Unauthenticated, "missing Authorization header")
+	}
+	auth := values[0]
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return status.Error(codes.Unauthenticated, "Authorization header must use Bearer scheme")
+	}
+	if strings.TrimPrefix(auth, "Bearer ") != s.token {
+		return status.Error(codes.Unauthenticated, "invalid token")
+	}
+	return nil
 }
 
 // Internal implementation of the Server interface.
 type server struct {
 	pb.UnimplementedRCEAgentServer
-	cfg ServerConfig
+	cfg   ServerConfig
+	token string // bearer token for auth; empty means no auth required
 	// --
 	repo       cmd.Repo     // running commands
 	grpcServer *grpc.Server // gRPC server instance of this agent

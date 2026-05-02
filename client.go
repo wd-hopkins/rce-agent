@@ -13,22 +13,23 @@ import (
 	"time"
 
 	"github.com/wd-hopkins/rce-agent/pb"
-	context "golang.org/x/net/context"
+	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 )
 
+// tokenCreds implements credentials.PerRPCCredentials for bearer token auth.
+type tokenCreds struct{ token string }
+
+func (t tokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	return map[string]string{"Authorization": "Bearer " + t.token}, nil
+}
+
+func (t tokenCreds) RequireTransportSecurity() bool { return false }
+
 var (
-	// ConnectTimeout describes the total timeout for establishing a client
-	// connection to the rceagent server.
-	ConnectTimeout = time.Duration(10) * time.Second
-
-	// ConnectBackoffMaxDelay configures the dialer to use the
-	// provided maximum delay when backing off after
-	// failed connection attempts.
-	ConnectBackoffMaxDelay = time.Duration(2) * time.Second
-
 	// KeepaliveTime is the interval at which the client sends keepalive
 	// probes to the server.
 	KeepaliveTime = time.Duration(30) * time.Second
@@ -46,13 +47,13 @@ type ExecStream interface {
 
 // A Client calls a remote agent (server) to execute commands.
 type Client interface {
-	// Connect to a remote agent.
+	// Open Connect to a remote agent.
 	Open(host, port string) error
 
 	// Close connection to a remote agent.
 	Close() error
 
-	// Return hostname and port of remote agent, if connected.
+	// AgentAddr Return hostname and port of remote agent, if connected.
 	AgentAddr() (string, string)
 
 	// Start a command on the remote agent. Must be connected first by calling
@@ -64,7 +65,7 @@ type Client interface {
 	// completes. It returns the final statue of the command or an error.
 	Wait(id string) (*pb.Status, error)
 
-	// Get the status of a running command. This is safe to call by multiple
+	// GetStatus Get the status of a running command. This is safe to call by multiple
 	// goroutines. ErrNotFound is returned if Wait or Stop has already been
 	// called.
 	GetStatus(id string) (*pb.Status, error)
@@ -73,12 +74,16 @@ type Client interface {
 	// been called.
 	Stop(id string) error
 
-	// Return a list of all running command IDs.
+	// Running Return a list of all running command IDs.
 	Running() ([]string, error)
 
-	// Execute a command on the remote agent and stream its status frames.
+	// Exec Execute a command on the remote agent and stream its status frames.
 	// The returned ExecStream must be drained until io.EOF or an error.
 	Exec(ctx context.Context, cmd *pb.Command) (ExecStream, error)
+
+	// SetToken configures a bearer token that is attached to every RPC as an
+	// Authorization header. Must be called before Open.
+	SetToken(token string)
 }
 
 type client struct {
@@ -87,6 +92,7 @@ type client struct {
 	conn      *grpc.ClientConn
 	agent     pb.RCEAgentClient
 	tlsConfig *tls.Config
+	token     string
 }
 
 // NewClient makes a new Client.
@@ -94,33 +100,33 @@ func NewClient(tlsConfig *tls.Config) Client {
 	return &client{tlsConfig: tlsConfig}
 }
 
+func (c *client) SetToken(token string) {
+	c.token = token
+}
+
 func (c *client) Open(host, port string) error {
-	var opt grpc.DialOption
+	var opts []grpc.DialOption
 	if c.tlsConfig == nil {
-		opt = grpc.WithInsecure()
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	} else {
 		creds := credentials.NewTLS(c.tlsConfig)
 		err := creds.OverrideServerName(host)
 		if err != nil {
 			return err
 		}
-		opt = grpc.WithTransportCredentials(creds)
+		opts = append(opts, grpc.WithTransportCredentials(creds))
 	}
-	conn, err := grpc.Dial(
-		host+":"+port,
-		opt, // insecure or with TLS
+	if c.token != "" {
+		opts = append(opts, grpc.WithPerRPCCredentials(tokenCreds{c.token}))
+	}
 
-		// Block = actually connect. Timeout = max time to retry on failure
-		// (no option to set retry count). Backoff delay = time between retries,
-		// up to Timeout.
-		grpc.WithBlock(),
-		grpc.WithTimeout(ConnectTimeout),
-		grpc.WithBackoffMaxDelay(ConnectBackoffMaxDelay),
+	opts = append(opts,
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:    KeepaliveTime,
 			Timeout: KeepaliveTimeout,
 		}),
 	)
+	conn, err := grpc.NewClient(host+":"+port, opts...)
 	if err != nil {
 		return err
 	}
@@ -185,7 +191,7 @@ func (c *client) Running() ([]string, error) {
 		return nil, err
 	}
 
-	ids := []string{}
+	var ids []string
 	for {
 		id, err := stream.Recv()
 		if err == io.EOF {
