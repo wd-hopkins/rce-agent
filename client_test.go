@@ -132,6 +132,7 @@ func TestClientExecLongRunningCommand(t *testing.T) {
 	}
 
 	var lastStatus *pb.Status
+	var firstStdoutAt, lastStdoutAt time.Time
 	for {
 		st, err := stream.Recv()
 		if err == io.EOF {
@@ -141,9 +142,22 @@ func TestClientExecLongRunningCommand(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, line := range st.Stdout {
-			fmt.Fprintln(os.Stdout, line)
+			now := time.Now()
+			if firstStdoutAt.IsZero() {
+				firstStdoutAt = now
+			}
+			lastStdoutAt = now
+			fmt.Fprintf(os.Stdout, "%s %s\n", now.Format(time.RFC3339Nano), line)
 		}
 		lastStatus = st
+	}
+
+	// Verify that stdout frames were streamed in real time rather than all
+	// delivered at once after the command finished. The echo-loop emits a line
+	// every 200ms for 2 seconds, so the spread between the first and last
+	// received stdout frame must be at least 1 second.
+	if spread := lastStdoutAt.Sub(firstStdoutAt); spread < time.Second {
+		t.Errorf("stdout frames were not streamed in real time: spread between first and last frame was %v, expected at least 1s", spread)
 	}
 
 	if lastStatus == nil {

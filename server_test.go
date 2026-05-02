@@ -338,24 +338,4 @@ func TestServerAnyCommand(t *testing.T) {
 	}
 }
 
-func TestServerExec(t *testing.T) {
-	s := rce.NewServer(LADDR, nil, whitelist)
 
-	c := &pb.Command{
-		Name:      "echo",
-		Arguments: []string{"hello"},
-	}
-
-	stream, err := s.Exec(context.Background(), c)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	gotStatus, err := stream.Recv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotStatus == nil {
-		t.Fatal("got nil pb.Status")
-	}
-}

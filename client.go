@@ -38,6 +38,12 @@ var (
 	KeepaliveTimeout = time.Duration(20) * time.Second
 )
 
+// ExecStream is returned by Client.Exec and delivers a stream of Status frames
+// from a running command. Callers must drain it until io.EOF or an error.
+type ExecStream interface {
+	Recv() (*pb.Status, error)
+}
+
 // A Client calls a remote agent (server) to execute commands.
 type Client interface {
 	// Connect to a remote agent.
